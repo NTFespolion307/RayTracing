@@ -794,7 +794,7 @@ int App::runSelfTest() {
     loadDemoScene();
     if (!sceneReady_) { vkLog("selftest: scene not ready"); return 1; }
 
-    settings_.resolutionIndex = 0; // 1080p
+    settings_.resolutionIndex = 2; // 1080p
     settings_.spp = 64;            // exercises the adaptive batching path
     settings_.maxBounces = 16;
     settings_.tileSize = 256;

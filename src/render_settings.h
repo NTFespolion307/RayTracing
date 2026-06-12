@@ -13,8 +13,10 @@ struct ResolutionOption {
     uint32_t height;
 };
 
-// All resolutions are 16:9, exactly as specified.
+// All resolutions are 16:9.
 static const ResolutionOption kResolutions[] = {
+    { "480p",  854,   480   },
+    { "720p",  1280,  720   },
     { "1080p", 1920,  1080  },
     { "2K",    2560,  1440  },
     { "4K",    3840,  2160  },
@@ -29,7 +31,7 @@ static const ResolutionOption kResolutions[] = {
 };
 static const int kResolutionCount = sizeof(kResolutions) / sizeof(kResolutions[0]);
 
-static const int kSppOptions[]     = { 16, 32, 64, 128, 256, 512, 1024, 2048, 4096 };
+static const int kSppOptions[]     = { 1, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096 };
 static const int kSppOptionCount   = sizeof(kSppOptions) / sizeof(kSppOptions[0]);
 
 static const int kBounceOptions[]  = { 16, 32, 48, 64 };
@@ -42,7 +44,7 @@ static const int kTileSizeOptionCount = sizeof(kTileSizeOptions) / sizeof(kTileS
 static const uint32_t kJpegMaxSide = 65500u;
 
 struct RenderSettings {
-    int      resolutionIndex = 0;          // index into kResolutions (1080p)
+    int      resolutionIndex = 2;          // index into kResolutions (1080p)
     int      spp             = 16;
     int      maxBounces      = 16;
     float    exposure        = 1.0f;
