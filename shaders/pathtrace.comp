@@ -1,0 +1,161 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#if USE_RAY_QUERY
+#extension GL_EXT_ray_query : require
+#endif
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+#include "common.glsl"
+
+// Generate a primary camera ray for pixel (px,py) with sub-pixel jitter.
+void cameraRay(float px, float py, out vec3 ro, out vec3 rd) {
+    float ndcX = (px / float(params.imageWidth)) * 2.0 - 1.0;
+    float ndcY = 1.0 - (py / float(params.imageHeight)) * 2.0;
+    ro = params.camOrigin.xyz;
+    rd = normalize(params.camW.xyz + ndcX * params.camU.xyz + ndcY * params.camV.xyz);
+}
+
+// Unidirectional path tracer with NEE + MIS on emissive triangles.
+vec3 radiance(vec3 ro, vec3 rd) {
+    vec3 L = vec3(0.0);
+    vec3 beta = vec3(1.0);
+    float prevPdfW = 0.0;
+    bool prevSpecular = true;
+
+    for (uint bounce = 0u; bounce <= params.maxBounces; ++bounce) {
+        Hit hit = traceClosest(ro, rd, INF);
+        if (!hit.valid) {
+            L += beta * skyColor(rd);
+            break;
+        }
+
+        Surface s = getSurface(ro, rd, hit);
+        Material mat = mats.m[s.matId];
+        uint type = uint(mat.params.x + 0.5);
+        float rough = mat.params.y;
+
+        vec3 wo = -rd;
+        vec3 nFace = dot(s.ns, wo) < 0.0 ? -s.ns : s.ns;
+
+        // Emitters: add their radiance, MIS-weighted against the BSDF sample
+        // that produced this ray (NEE handles the complementary strategy).
+        if (type == MAT_EMISSIVE) {
+            if (prevSpecular || params.numLights == 0u) {
+                L += beta * mat.emission.xyz;
+            } else {
+                vec3 ln = s.ng;
+                float cosLight = abs(dot(ln, rd));
+                float area = 0.0;
+                // Recover the triangle area for the light pdf.
+                Triangle tri = tris.t[hit.prim];
+                vec3 a = verts.v[tri.v0].pos.xyz;
+                vec3 b = verts.v[tri.v1].pos.xyz;
+                vec3 c = verts.v[tri.v2].pos.xyz;
+                area = 0.5 * length(cross(b - a, c - a));
+                float dist2 = hit.t * hit.t;
+                float lightPdfW = (cosLight > 1e-4 && area > 0.0)
+                    ? dist2 / (cosLight * area * float(params.numLights))
+                    : 0.0;
+                float w = lightPdfW > 0.0 ? powerHeuristic(prevPdfW, lightPdfW) : 1.0;
+                L += beta * mat.emission.xyz * w;
+            }
+            break; // emitters do not re-scatter in v1
+        }
+
+        // Next-event estimation (skip for delta/specular interactions).
+        bool deltaSpecular = (type == MAT_GLASS) ||
+                             (type == MAT_METAL && rough < 0.03);
+        if (!deltaSpecular) {
+            L += beta * sampleLightNEE(s, wo, mat, type, max(rough, 0.03));
+        }
+
+        // BSDF sampling for the next bounce.
+        vec3 wi;
+        if (type == MAT_LAMBERT) {
+            float pdf;
+            wi = cosineSampleHemisphere(nFace, pdf);
+            if (pdf <= 0.0) break;
+            beta *= mat.albedo.xyz; // (albedo/pi * cos) / (cos/pi) = albedo
+            prevPdfW = pdf;
+            prevSpecular = false;
+        } else if (type == MAT_METAL) {
+            float a = max(rough, 0.0);
+            if (a < 0.03) {
+                // Near-mirror: treat as specular reflection.
+                wi = reflect(rd, nFace);
+                vec3 F = fresnelSchlick(mat.albedo.xyz, max(dot(nFace, wi), 0.0));
+                beta *= F;
+                prevSpecular = true;
+            } else {
+                vec3 h = sampleGGXHalf(nFace, a);
+                wi = reflect(rd, h);
+                if (dot(nFace, wi) <= 0.0) break;
+                vec3 f = metalEval(nFace, wo, wi, mat.albedo.xyz, a);
+                float pdf = metalPdf(nFace, wo, wi, a);
+                if (pdf <= 0.0) break;
+                beta *= f * dot(nFace, wi) / pdf;
+                prevPdfW = pdf;
+                prevSpecular = false;
+            }
+        } else { // MAT_GLASS
+            float ior = mat.params.z;
+            bool entering = dot(rd, s.ns) < 0.0;
+            vec3 n = entering ? s.ns : -s.ns;
+            float eta = entering ? (1.0 / ior) : ior;
+            float cosI = dot(-rd, n);
+            float Fr = fresnelDielectric(cosI, eta);
+            if (rnd() < Fr) {
+                wi = reflect(rd, n);
+            } else {
+                wi = refract(rd, n, eta);
+                if (dot(wi, wi) < 1e-8) wi = reflect(rd, n); // TIR guard
+            }
+            wi = normalize(wi);
+            prevSpecular = true;
+        }
+
+        // Offset the new ray to avoid self-intersection.
+        vec3 offN = dot(wi, s.ng) < 0.0 ? -s.ng : s.ng;
+        ro = s.p + offN * EPS;
+        rd = wi;
+
+        // Russian roulette after a few bounces.
+        if (bounce >= 8u) {
+            float q = clamp(max(beta.x, max(beta.y, beta.z)), 0.05, 0.95);
+            if (rnd() > q) break;
+            beta /= q;
+        }
+    }
+    return L;
+}
+
+void main() {
+    uvec2 lid = gl_GlobalInvocationID.xy;
+    if (lid.x >= pc.tileW || lid.y >= pc.tileH) return;
+
+    uint px = pc.tileX + lid.x;
+    uint py = pc.tileY + lid.y;
+    uint accumIdx = lid.y * pc.tileW + lid.x;
+
+    bool clampOn = params.sky1.x > 0.5;
+    float clampVal = params.sky0.w;
+
+    vec3 sum = vec3(0.0);
+    for (uint s = 0u; s < pc.sampleCount; ++s) {
+        uint sampleIdx = pc.sampleBase + s;
+        rngInit(px, py, sampleIdx, pc.frameSeed);
+        float jx = rnd();
+        float jy = rnd();
+        vec3 ro, rd;
+        cameraRay(float(px) + jx, float(py) + jy, ro, rd);
+        vec3 c = radiance(ro, rd);
+        if (clampOn) c = min(c, vec3(clampVal));
+        // Guard against NaN/Inf so a single bad path can't poison the tile.
+        if (any(isnan(c)) || any(isinf(c))) c = vec3(0.0);
+        sum += c;
+    }
+
+    vec4 prev = accum.data[accumIdx];
+    accum.data[accumIdx] = vec4(prev.xyz + sum, prev.w + float(pc.sampleCount));
+}
