@@ -1,0 +1,27 @@
+# CMake build output and fetched dependencies
+/build/
+/_deps_cache/
+/out/
+CMakeUserPresets.json
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.vcxproj.user
+
+# Generated / runtime files
+imgui.ini
+gigatracer.log
+selftest_out.*
+*.scratch
+
+# Saved renders (don't commit large outputs)
+*.ppm
+*.png
+*.jpg
+*.jpeg
+
+# OS cruft
+Thumbs.db
+desktop.ini

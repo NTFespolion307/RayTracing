@@ -92,6 +92,27 @@ Two tabs:
    straight out of the memory-mapped file at full resolution. **Save Image…**
    writes PNG, JPEG, or PPM.
 
+### Render options
+
+All resolutions are 16:9, selected from a dropdown:
+
+| Label | Pixels | | Label | Pixels |
+|---|---|---|---|---|
+| 480p  | 854 × 480     | | 10K | 9,600 × 5,400 |
+| 720p  | 1,280 × 720   | | 15K | 14,400 × 8,100 |
+| 1080p | 1,920 × 1,080 | | 20K | 19,200 × 10,800 |
+| 2K    | 2,560 × 1,440 | | 40K | 38,400 × 21,600 |
+| 4K    | 3,840 × 2,160 | | 60K | 57,600 × 32,400 |
+| 6K    | 5,760 × 3,240 | | 80K | 76,800 × 43,200 |
+| 8K    | 7,680 × 4,320 | |     |               |
+
+- **Samples per pixel:** 1, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096
+  (1/4/8 are handy for fast look-dev; the default is 16).
+- **Max bounces:** 16, 32, 48, 64.
+- **Tile size** (Advanced): 128 / 256 / 512 (default 256).
+- Plus exposure, firefly clamp, sky on/off + intensity, backend override
+  (Auto / Hardware RT / Compute), and a scratch-folder picker.
+
 ### Saving
 
 - **PNG** — lossless, available at every resolution (streamed via libpng
