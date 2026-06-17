@@ -267,6 +267,7 @@ set(APP_SOURCES
     src/renderer.cpp
     src/viewer.cpp
     src/savers.cpp
+    src/theme.cpp
     src/ui.cpp)
 
 add_executable(VkGigaTracer WIN32 ${APP_SOURCES})

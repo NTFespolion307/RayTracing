@@ -194,9 +194,10 @@ void Viewer::drawResult(uint32_t fullW, uint32_t fullH, const MmapImage* full) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->PushClipRect(origin, ImVec2(origin.x + region.x, origin.y + region.y), true);
 
-    // Letterbox background.
+    // Letterbox matte (kept light to match the pro-tool theme; slightly darker
+    // than the surrounding surface so the image bounds read clearly).
     dl->AddRectFilled(origin, ImVec2(origin.x + region.x, origin.y + region.y),
-                      IM_COL32(20, 20, 24, 255));
+                      IM_COL32(0xE9, 0xEC, 0xF0, 255));
 
     bool useDetail = full && full->valid() && dispW > preview_.w * 1.05f && fullW > preview_.w;
     if (preview_.valid())

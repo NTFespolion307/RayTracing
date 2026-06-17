@@ -34,8 +34,12 @@ private:
     void mainLoop();
     void drawFrame();
     void buildUI();
-    void drawSetupTab();
-    void drawResultTab();
+    void drawHeaderBar();
+    void drawSidebar();
+    void drawViewport();
+    void drawPreview();
+    void drawResultView();
+    void drawStatusBar();
     void drawSaveModal();
 
     void loadDemoScene();
@@ -75,8 +79,9 @@ private:
     Scene           scene_;
     RenderSettings  settings_;
     bool            sceneReady_ = false;
-    int             activeTab_ = 0;            // 0 = setup, 1 = result (actual)
+    int             activeTab_ = 0;            // 0 = preview, 1 = result
     int             requestTab_ = -1;          // one-shot programmatic switch
+    bool            wasRendering_ = false;     // tracks final-render completion
     std::string     statusLine_;
     std::string     backendLabel_;
     int             jpegQuality_ = 92;

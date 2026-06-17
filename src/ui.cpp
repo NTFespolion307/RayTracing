@@ -1,5 +1,6 @@
 #include "ui.h"
 #include "obj_loader.h"
+#include "theme.h"
 
 #include <volk.h>
 #define GLFW_INCLUDE_NONE
@@ -311,11 +312,15 @@ bool App::initImGui() {
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    ImGui::StyleColorsDark();
     ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard; // keyboard accessibility
     float xscale = 1.0f, yscale = 1.0f;
     glfwGetWindowContentScale(window_, &xscale, &yscale);
-    io.FontGlobalScale = xscale > 0 ? xscale : 1.0f;
+    float dpiScale = xscale > 0 ? xscale : 1.0f;
+    // DPI is baked into the font sizes and the style metrics (not just the
+    // font), so leave FontGlobalScale at 1 to avoid double-scaling.
+    theme::loadFonts(io, dpiScale);
+    theme::apply(dpiScale);
 
     ImGui_ImplGlfw_InitForVulkan(window_, true);
     ImGui_ImplVulkan_LoadFunctions(imguiLoader, ctx_.instance());
@@ -430,111 +435,123 @@ void App::startSave(SaveFormat fmt) {
 // ---------------------------------------------------------------------------
 // UI panels
 // ---------------------------------------------------------------------------
-void App::drawSetupTab() {
-    ImGui::BeginChild("settings", ImVec2(360, 0), true);
-    ImGui::TextUnformatted("Render Settings");
-    ImGui::Separator();
-
-    // Resolution
-    if (ImGui::BeginCombo("Resolution", kResolutions[settings_.resolutionIndex].label)) {
-        for (int i = 0; i < kResolutionCount; ++i) {
-            char label[64];
-            std::snprintf(label, sizeof(label), "%s  (%u x %u)",
-                          kResolutions[i].label, kResolutions[i].width, kResolutions[i].height);
-            if (ImGui::Selectable(label, settings_.resolutionIndex == i))
-                settings_.resolutionIndex = i;
+// A combo whose currently-selected option text is `preview`; rows of `count`
+// entries built by `entry(i, char* buf, size_t)`. Returns the picked index, or
+// -1 if nothing was clicked. Laid out as a label-left / control-right row.
+namespace {
+template <class EntryFn>
+int comboRow(const char* label, const char* id, const char* preview,
+             int count, int current, EntryFn entry) {
+    int picked = -1;
+    theme::RowLabel(label);
+    if (ImGui::BeginCombo(id, preview)) {
+        for (int i = 0; i < count; ++i) {
+            char buf[64];
+            entry(i, buf, sizeof(buf));
+            if (ImGui::Selectable(buf, current == i)) picked = i;
         }
         ImGui::EndCombo();
     }
-    // SPP
-    {
-        char cur[16]; std::snprintf(cur, sizeof(cur), "%d", settings_.spp);
-        if (ImGui::BeginCombo("Samples (spp)", cur)) {
-            for (int i = 0; i < kSppOptionCount; ++i) {
-                char l[16]; std::snprintf(l, sizeof(l), "%d", kSppOptions[i]);
-                if (ImGui::Selectable(l, settings_.spp == kSppOptions[i])) settings_.spp = kSppOptions[i];
-            }
-            ImGui::EndCombo();
-        }
+    return picked;
+}
+} // namespace
+
+void App::drawSidebar() {
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, theme::colors().surface);
+    ImGui::BeginChild("sidebar", ImVec2(theme::scale(340), 0), ImGuiChildFlags_Border);
+
+    theme::SectionHeader("RENDER SETTINGS");
+
+    // --- Output -----------------------------------------------------------
+    if (ImGui::CollapsingHeader("Output", ImGuiTreeNodeFlags_DefaultOpen)) {
+        char prev[64];
+        std::snprintf(prev, sizeof(prev), "%s  (%u x %u)",
+                      kResolutions[settings_.resolutionIndex].label,
+                      kResolutions[settings_.resolutionIndex].width,
+                      kResolutions[settings_.resolutionIndex].height);
+        int r = comboRow("Resolution", "##res", prev, kResolutionCount,
+                         settings_.resolutionIndex,
+                         [](int i, char* b, size_t n) {
+            std::snprintf(b, n, "%s  (%u x %u)", kResolutions[i].label,
+                          kResolutions[i].width, kResolutions[i].height);
+        });
+        if (r >= 0) settings_.resolutionIndex = r;
     }
-    // Bounces
-    {
-        char cur[16]; std::snprintf(cur, sizeof(cur), "%d", settings_.maxBounces);
-        if (ImGui::BeginCombo("Max bounces", cur)) {
-            for (int i = 0; i < kBounceOptionCount; ++i) {
-                char l[16]; std::snprintf(l, sizeof(l), "%d", kBounceOptions[i]);
-                if (ImGui::Selectable(l, settings_.maxBounces == kBounceOptions[i])) settings_.maxBounces = kBounceOptions[i];
-            }
-            ImGui::EndCombo();
+
+    // --- Quality ----------------------------------------------------------
+    if (ImGui::CollapsingHeader("Quality", ImGuiTreeNodeFlags_DefaultOpen)) {
+        char prev[16];
+        std::snprintf(prev, sizeof(prev), "%d", settings_.spp);
+        int sIdx = -1;
+        for (int i = 0; i < kSppOptionCount; ++i) if (kSppOptions[i] == settings_.spp) sIdx = i;
+        int s = comboRow("Samples", "##spp", prev, kSppOptionCount, sIdx,
+                         [](int i, char* b, size_t n) { std::snprintf(b, n, "%d", kSppOptions[i]); });
+        if (s >= 0) settings_.spp = kSppOptions[s];
+
+        std::snprintf(prev, sizeof(prev), "%d", settings_.maxBounces);
+        int bIdx = -1;
+        for (int i = 0; i < kBounceOptionCount; ++i) if (kBounceOptions[i] == settings_.maxBounces) bIdx = i;
+        int bb = comboRow("Max bounces", "##bounce", prev, kBounceOptionCount, bIdx,
+                          [](int i, char* b, size_t n) { std::snprintf(b, n, "%d", kBounceOptions[i]); });
+        if (bb >= 0) settings_.maxBounces = kBounceOptions[bb];
+
+        theme::RowLabel("Exposure");
+        ImGui::SliderFloat("##exposure", &settings_.exposure, 0.1f, 8.0f, "%.2f");
+
+        ImGui::Checkbox("Firefly clamp", &settings_.fireflyClamp);
+        if (settings_.fireflyClamp) {
+            theme::RowLabel("Clamp value");
+            ImGui::SliderFloat("##clamp", &settings_.fireflyClampValue, 1.0f, 256.0f, "%.0f");
         }
     }
 
-    ImGui::SliderFloat("Exposure", &settings_.exposure, 0.1f, 8.0f, "%.2f");
-    ImGui::Checkbox("Firefly clamp", &settings_.fireflyClamp);
-    if (settings_.fireflyClamp) {
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(90);
-        ImGui::SliderFloat("##clamp", &settings_.fireflyClampValue, 1.0f, 256.0f, "%.0f");
-    }
-    ImGui::Checkbox("Sky", &settings_.skyEnabled);
-    if (settings_.skyEnabled) {
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(120);
-        ImGui::SliderFloat("Intensity", &settings_.skyIntensity, 0.0f, 4.0f, "%.2f");
-    }
-
-    // Backend override
-    const char* backends[] = { "Auto", "Hardware RT", "Compute" };
-    int bidx = (int)settings_.backend;
-    if (ImGui::Combo("Backend", &bidx, backends, 3)) {
-        settings_.backend = (Backend)bidx;
-        if (sceneReady_ && !renderer_.finalRunning()) {
-            renderer_.prepareScene(scene_, settings_.backend);
-            Backend b = renderer_.activeBackend();
-            backendLabel_ = (b == Backend::HardwareRT) ? "Hardware Ray Query" : "Compute";
-            renderer_.setPreviewCamera(scene_.camera);
+    // --- Lighting ---------------------------------------------------------
+    if (ImGui::CollapsingHeader("Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("Sky", &settings_.skyEnabled);
+        if (settings_.skyEnabled) {
+            theme::RowLabel("Sky intensity");
+            ImGui::SliderFloat("##skyint", &settings_.skyIntensity, 0.0f, 4.0f, "%.2f");
         }
     }
-    ImGui::Text("Active backend: %s", backendLabel_.c_str());
-    ImGui::Text("GPU: %s", ctx_.deviceName());
 
-    if (ImGui::CollapsingHeader("Advanced")) {
-        char cur[16]; std::snprintf(cur, sizeof(cur), "%d", settings_.tileSize);
-        if (ImGui::BeginCombo("Tile size", cur)) {
-            for (int i = 0; i < kTileSizeOptionCount; ++i) {
-                char l[16]; std::snprintf(l, sizeof(l), "%d", kTileSizeOptions[i]);
-                if (ImGui::Selectable(l, settings_.tileSize == kTileSizeOptions[i])) settings_.tileSize = kTileSizeOptions[i];
+    // --- Performance / hardware ------------------------------------------
+    if (ImGui::CollapsingHeader("Performance")) {
+        const char* backends[] = { "Auto", "Hardware RT", "Compute" };
+        theme::RowLabel("Backend");
+        int bidx = (int)settings_.backend;
+        if (ImGui::Combo("##backend", &bidx, backends, 3)) {
+            settings_.backend = (Backend)bidx;
+            if (sceneReady_ && !renderer_.finalRunning()) {
+                renderer_.prepareScene(scene_, settings_.backend);
+                Backend b = renderer_.activeBackend();
+                backendLabel_ = (b == Backend::HardwareRT) ? "Hardware Ray Query" : "Compute";
+                renderer_.setPreviewCamera(scene_.camera);
             }
-            ImGui::EndCombo();
         }
+
+        char prev[16];
+        std::snprintf(prev, sizeof(prev), "%d", settings_.tileSize);
+        int tIdx = -1;
+        for (int i = 0; i < kTileSizeOptionCount; ++i) if (kTileSizeOptions[i] == settings_.tileSize) tIdx = i;
+        int t = comboRow("Tile size", "##tile", prev, kTileSizeOptionCount, tIdx,
+                         [](int i, char* b, size_t n) { std::snprintf(b, n, "%d", kTileSizeOptions[i]); });
+        if (t >= 0) settings_.tileSize = kTileSizeOptions[t];
+
         std::string sf = settings_.scratchFolder.empty() ? "(system temp)" : wideToUtf8(settings_.scratchFolder);
-        ImGui::Text("Scratch: %s", sf.c_str());
-        if (ImGui::Button("Choose scratch folder...")) {
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::colors().textMuted);
+        ImGui::TextWrapped("Scratch: %s", sf.c_str());
+        ImGui::PopStyleColor();
+        if (theme::SecondaryButton("Choose scratch folder...", ImVec2(-FLT_MIN, 0))) {
             std::wstring f = pickFolderDialog();
             if (!f.empty()) settings_.scratchFolder = f;
         }
     }
 
-    ImGui::Separator();
-    if (ImGui::Button("Demo Scene", ImVec2(110, 0))) loadDemoScene();
-    ImGui::SameLine();
-    if (ImGui::Button("Load OBJ...", ImVec2(110, 0))) loadObjDialog();
-    ImGui::SameLine();
-    if (ImGui::Button("Render", ImVec2(110, 0))) startFinalRender();
-
-    ImGui::Spacing();
-    {
-        uint64_t bytes = MmapImage::requiredBytes(settings_.width(), settings_.height());
-        ImGui::Text("Output: %u x %u", settings_.width(), settings_.height());
-        ImGui::Text("Scratch file: %.1f GB", bytes / (1024.0 * 1024.0 * 1024.0));
-    }
-    ImGui::TextWrapped("%s", statusLine_.c_str());
     ImGui::EndChild();
+    ImGui::PopStyleColor();
+}
 
-    ImGui::SameLine();
-
-    ImGui::BeginChild("preview", ImVec2(0, 0), true);
-    ImGui::TextUnformatted("Interactive Preview (drag: orbit, right-drag: pan, wheel: zoom)");
+void App::drawPreview() {
     ImVec2 p0 = ImGui::GetCursorScreenPos();
     ImVec2 region = ImGui::GetContentRegionAvail();
     if (region.x > 16 && region.y > 16 && sceneReady_ && !renderer_.finalRunning()) {
@@ -570,49 +587,147 @@ void App::drawSetupTab() {
         renderer_.copyPreviewPixels(px, pw, ph);
         ImGui::SetCursorScreenPos(p0);
         viewer_.drawFitted(px, pw, ph);
-    } else if (!sceneReady_) {
-        ImGui::TextUnformatted("Load the demo scene or an OBJ to begin.");
+    } else {
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::colors().textMuted);
+        if (!sceneReady_)
+            ImGui::TextUnformatted("Load the demo scene or an OBJ to begin.");
+        else if (renderer_.finalRunning())
+            ImGui::TextUnformatted("A final render is running - see the Result view.");
+        ImGui::PopStyleColor();
     }
-    ImGui::EndChild();
 }
 
-void App::drawResultTab() {
+void App::drawResultView() {
     Renderer::Progress pr = renderer_.progress();
+    bool running = renderer_.finalRunning();
 
-    ImGui::BeginChild("resultinfo", ImVec2(0, 88), true);
-    ImGui::Text("Tiles: %llu / %llu", (unsigned long long)pr.tilesDone, (unsigned long long)pr.tilesTotal);
-    ImGui::SameLine(); ImGui::Text("  Tile spp: %u / %u", pr.curTileSpp, pr.targetSpp);
-    ImGui::SameLine(); ImGui::Text("  %.2f MRays/s", pr.mrays);
-    float frac = pr.tilesTotal ? float(pr.tilesDone) / float(pr.tilesTotal) : 0.0f;
-    ImGui::ProgressBar(frac, ImVec2(-1, 0));
-    ImGui::Text("Elapsed: %.1f s", pr.elapsed);
-    ImGui::SameLine(); ImGui::Text("   ETA: %.1f s", pr.eta);
-    ImGui::SameLine();
-    if (renderer_.finalRunning()) {
-        if (ImGui::Button("Cancel")) { renderer_.cancelFinal(); statusLine_ = "Cancelling..."; }
+    // Progress bar (full width) shown while running or once any tile is done.
+    if (running || pr.tilesDone > 0) {
+        float frac = pr.tilesTotal ? float(pr.tilesDone) / float(pr.tilesTotal) : 0.0f;
+        ImGui::ProgressBar(frac, ImVec2(-FLT_MIN, theme::scale(8)), "");
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::colors().textMuted);
+        ImGui::Text("Tiles %llu / %llu   \xc2\xb7   spp %u / %u   \xc2\xb7   %.2f MRays/s   \xc2\xb7   %.1fs elapsed   \xc2\xb7   ETA %.1fs",
+                    (unsigned long long)pr.tilesDone, (unsigned long long)pr.tilesTotal,
+                    pr.curTileSpp, pr.targetSpp, pr.mrays, pr.elapsed, pr.eta);
+        ImGui::PopStyleColor();
     } else {
-        bool any = pr.tilesDone > 0;
-        if (!any) ImGui::BeginDisabled();
-        // Defer OpenPopup to drawSaveModal so it shares the popup's ID scope
-        // (this button is inside a child window; the popup is not).
-        if (ImGui::Button("Save Image...")) openSavePopup_ = true;
-        if (!any) ImGui::EndDisabled();
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::colors().textMuted);
+        ImGui::TextUnformatted("No render yet. Press Render to start.");
+        ImGui::PopStyleColor();
     }
-    ImGui::EndChild();
 
     // Update the final-image preview texture periodically.
-    if (++finalPreviewThrottle_ >= 8 || (!renderer_.finalRunning() && finalPreviewThrottle_ > 0)) {
+    if (++finalPreviewThrottle_ >= 8 || (!running && finalPreviewThrottle_ > 0)) {
         finalPreviewThrottle_ = 0;
         std::vector<uint8_t> px; uint32_t pw = 0, ph = 0;
         renderer_.copyFinalPreview(px, pw, ph);
         if (pw > 0 && ph > 0) viewer_.setPreview(px, pw, ph);
     }
 
-    ImGui::BeginChild("resultview", ImVec2(0, 0), true);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, theme::colors().surfaceAlt);
+    ImGui::BeginChild("resultview", ImVec2(0, 0), ImGuiChildFlags_Border);
     viewer_.drawResult(settings_.width(), settings_.height(), &renderer_.finalImage());
     ImGui::EndChild();
+    ImGui::PopStyleColor();
+}
+
+void App::drawViewport() {
+    ImGui::SameLine();
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, theme::colors().surface);
+    ImGui::BeginChild("viewport", ImVec2(0, 0), ImGuiChildFlags_Border);
+
+    // A programmatic switch (e.g. pressing Render) wins for this frame.
+    if (requestTab_ >= 0) { activeTab_ = requestTab_; requestTab_ = -1; }
+
+    const char* modes[] = { "Preview", "Result" };
+    theme::SegmentedControl("vpmode", modes, 2, &activeTab_);
+
+    // Right-aligned contextual action for the Result view.
+    if (activeTab_ == 1) {
+        float bw = theme::scale(140);
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - bw);
+        if (renderer_.finalRunning()) {
+            if (theme::DangerButton("Cancel", ImVec2(bw, 0))) {
+                renderer_.cancelFinal();
+                statusLine_ = "Cancelling...";
+            }
+        } else {
+            bool any = renderer_.progress().tilesDone > 0;
+            if (!any) ImGui::BeginDisabled();
+            // Defer OpenPopup to drawSaveModal so it shares the popup's ID scope.
+            if (theme::PrimaryButton("Save Image...", ImVec2(bw, 0))) openSavePopup_ = true;
+            if (!any) ImGui::EndDisabled();
+        }
+    } else {
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::colors().textMuted);
+        ImGui::SameLine(0, theme::space().lg);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("drag: orbit   \xc2\xb7   right-drag: pan   \xc2\xb7   wheel: zoom");
+        ImGui::PopStyleColor();
+    }
+
+    ImGui::Separator();
+
+    if (activeTab_ == 0) drawPreview();
+    else                 drawResultView();
+
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
 
     drawSaveModal();
+}
+
+void App::drawHeaderBar() {
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(theme::space().md, theme::space().sm));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, theme::colors().surface);
+    ImGui::BeginChild("header", ImVec2(0, theme::scale(56)), ImGuiChildFlags_Border,
+                      ImGuiWindowFlags_NoScrollbar);
+
+    if (theme::fontHeader()) ImGui::PushFont(theme::fontHeader());
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("VkGigaTracer");
+    if (theme::fontHeader()) ImGui::PopFont();
+
+    ImGui::SameLine(0, theme::space().lg);
+    ImGui::AlignTextToFramePadding();
+    ImGui::PushStyleColor(ImGuiCol_Text, theme::colors().textMuted);
+    ImGui::Text("GPU: %s   \xc2\xb7   Backend: %s", ctx_.deviceName(), backendLabel_.c_str());
+    ImGui::PopStyleColor();
+
+    // Right-aligned action cluster: Demo | Load OBJ | Render.
+    float bw1 = theme::scale(110), bw2 = theme::scale(120), bw3 = theme::scale(130);
+    float gap = theme::space().sm;
+    float cluster = bw1 + bw2 + bw3 + gap * 2;
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - cluster);
+    if (theme::SecondaryButton("Demo Scene", ImVec2(bw1, 0))) loadDemoScene();
+    ImGui::SameLine(0, gap);
+    if (theme::SecondaryButton("Load OBJ...", ImVec2(bw2, 0))) loadObjDialog();
+    ImGui::SameLine(0, gap);
+    bool canRender = sceneReady_ && !renderer_.finalRunning();
+    if (!canRender) ImGui::BeginDisabled();
+    if (theme::PrimaryButton("Render", ImVec2(bw3, 0))) startFinalRender();
+    if (!canRender) ImGui::EndDisabled();
+
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar();
+}
+
+void App::drawStatusBar() {
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(theme::space().md, theme::space().sm));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, theme::colors().surface);
+    ImGui::BeginChild("statusbar", ImVec2(0, theme::scale(36)), ImGuiChildFlags_Border,
+                      ImGuiWindowFlags_NoScrollbar);
+    uint64_t bytes = MmapImage::requiredBytes(settings_.width(), settings_.height());
+    char right[128];
+    std::snprintf(right, sizeof(right), "Output %u x %u   \xc2\xb7   Scratch %.1f GB",
+                  settings_.width(), settings_.height(), bytes / (1024.0 * 1024.0 * 1024.0));
+    theme::StatusBar(statusLine_.empty() ? "Ready." : statusLine_.c_str(), right);
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar();
 }
 
 void App::drawSaveModal() {
@@ -620,18 +735,24 @@ void App::drawSaveModal() {
 
     if (openSavePopup_) { ImGui::OpenPopup("SaveOptions"); openSavePopup_ = false; }
     if (ImGui::BeginPopup("SaveOptions")) {
-        ImGui::TextUnformatted("Choose a format:");
-        if (ImGui::Button("PNG (lossless)")) { ImGui::CloseCurrentPopup(); startSave(SaveFormat::PNG); }
+        theme::SectionHeader("SAVE IMAGE");
+        if (theme::SecondaryButton("PNG (lossless)", ImVec2(theme::scale(220), 0))) {
+            ImGui::CloseCurrentPopup(); startSave(SaveFormat::PNG);
+        }
         if (!jpegAllowed) ImGui::BeginDisabled();
-        if (ImGui::Button("JPEG")) { ImGui::CloseCurrentPopup(); startSave(SaveFormat::JPEG); }
+        if (theme::SecondaryButton("JPEG", ImVec2(theme::scale(220), 0))) {
+            ImGui::CloseCurrentPopup(); startSave(SaveFormat::JPEG);
+        }
         if (!jpegAllowed) {
             ImGui::EndDisabled();
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                 ImGui::SetTooltip("JPEG is limited to 65500 px per side.");
         }
-        ImGui::SetNextItemWidth(160);
-        ImGui::SliderInt("JPEG quality", &jpegQuality_, 1, 100);
-        if (ImGui::Button("PPM (P6 raw)")) { ImGui::CloseCurrentPopup(); startSave(SaveFormat::PPM); }
+        theme::RowLabel("JPEG quality");
+        ImGui::SliderInt("##jpegq", &jpegQuality_, 1, 100);
+        if (theme::SecondaryButton("PPM (P6 raw)", ImVec2(theme::scale(220), 0))) {
+            ImGui::CloseCurrentPopup(); startSave(SaveFormat::PPM);
+        }
         ImGui::EndPopup();
     }
 
@@ -640,8 +761,8 @@ void App::drawSaveModal() {
         saveModalOpen_ = false;
     }
     if (ImGui::BeginPopupModal("Saving", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("Saving image...");
-        ImGui::ProgressBar(saveProgress_.progress.load(), ImVec2(320, 0));
+        ImGui::TextUnformatted("Saving image...");
+        ImGui::ProgressBar(saveProgress_.progress.load(), ImVec2(theme::scale(320), 0));
         if (saveProgress_.done.load()) {
             if (saveThread_.joinable()) saveThread_.join();
             saving_ = false;
@@ -649,32 +770,65 @@ void App::drawSaveModal() {
             statusLine_ = ok ? "Image saved." : ("Save failed: " + saveProgress_.message);
             ImGui::CloseCurrentPopup();
         } else {
-            if (ImGui::Button("Cancel")) saveProgress_.cancel.store(true);
+            if (theme::DangerButton("Cancel")) saveProgress_.cancel.store(true);
         }
         ImGui::EndPopup();
     }
 }
 
 void App::buildUI() {
+    // Detect when a final render stops so the status line doesn't get stuck on
+    // "Rendering...". A full tile count means it completed; otherwise it was
+    // cancelled (cancelFinal already wrote "Cancelling..." in that case).
+    {
+        bool running = renderer_.finalRunning();
+        if (wasRendering_ && !running) {
+            Renderer::Progress pr = renderer_.progress();
+            if (pr.tilesTotal > 0 && pr.tilesDone >= pr.tilesTotal) {
+                char buf[96];
+                std::snprintf(buf, sizeof(buf), "Render complete in %.1f s.", pr.elapsed);
+                statusLine_ = buf;
+            } else {
+                statusLine_ = "Render cancelled.";
+            }
+        }
+        wasRendering_ = running;
+    }
+
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->WorkPos);
     ImGui::SetNextWindowSize(vp->WorkSize);
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                              ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
-                             ImGuiWindowFlags_NoBringToFrontOnFocus;
+                             ImGuiWindowFlags_NoBringToFrontOnFocus |
+                             ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, theme::colors().bg);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(theme::space().md, theme::space().md));
     ImGui::Begin("VkGigaTracer", nullptr, flags);
-    if (ImGui::BeginTabBar("tabs")) {
-        // Apply SetSelected only on the single frame a programmatic switch is
-        // requested (e.g. pressing Render). Forcing it every frame would fight
-        // ImGui's own selection state and the user's clicks, flipping tabs.
-        ImGuiTabItemFlags f0 = (requestTab_ == 0) ? ImGuiTabItemFlags_SetSelected : 0;
-        ImGuiTabItemFlags f1 = (requestTab_ == 1) ? ImGuiTabItemFlags_SetSelected : 0;
-        if (ImGui::BeginTabItem("Setup & Preview", nullptr, f0)) { activeTab_ = 0; drawSetupTab(); ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("Render Result", nullptr, f1)) { activeTab_ = 1; drawResultTab(); ImGui::EndTabItem(); }
-        requestTab_ = -1; // consume the request; ImGui owns selection afterwards
-        ImGui::EndTabBar();
-    }
+
+    // Shell: header bar, then a body that splits into sidebar + viewport, then
+    // a status bar pinned to the bottom.
+    drawHeaderBar();
+    ImGui::Spacing();
+
+    float footer = theme::scale(36) + ImGui::GetStyle().ItemSpacing.y;
+    float bodyH = ImGui::GetContentRegionAvail().y - footer;
+    if (bodyH < theme::scale(120)) bodyH = theme::scale(120);
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::BeginChild("body", ImVec2(0, bodyH), ImGuiChildFlags_None,
+                      ImGuiWindowFlags_NoScrollbar);
+    ImGui::PopStyleVar(); // nested children use the normal padding again
+    drawSidebar();
+    drawViewport();   // does its own SameLine()
+    ImGui::EndChild();
+
+    ImGui::Spacing();
+    drawStatusBar();
+
     ImGui::End();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
 }
 
 // ---------------------------------------------------------------------------
@@ -706,7 +860,7 @@ void App::drawFrame() {
     vkBeginCommandBuffer(cmd, &bi);
 
     VkClearValue clear{};
-    clear.color = { { 0.08f, 0.08f, 0.10f, 1.0f } };
+    clear.color = { { 0.957f, 0.961f, 0.969f, 1.0f } }; // theme bg (#F4F5F7)
     VkRenderPassBeginInfo rbi{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
     rbi.renderPass = renderPass_;
     rbi.framebuffer = scFramebuffers_[imageIndex];
