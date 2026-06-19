@@ -1,5 +1,6 @@
 #include "viewer.h"
 #include "mathlib.h"
+#include "theme.h"
 #include <imgui_impl_vulkan.h>
 #include <algorithm>
 #include <cmath>
@@ -194,10 +195,11 @@ void Viewer::drawResult(uint32_t fullW, uint32_t fullH, const MmapImage* full) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->PushClipRect(origin, ImVec2(origin.x + region.x, origin.y + region.y), true);
 
-    // Letterbox matte (kept light to match the pro-tool theme; slightly darker
-    // than the surrounding surface so the image bounds read clearly).
+    // Letterbox matte: theme background, which is slightly darker than the
+    // surrounding surface in both light and dark modes, so the image bounds
+    // read clearly without a hardcoded colour that breaks the dark theme.
     dl->AddRectFilled(origin, ImVec2(origin.x + region.x, origin.y + region.y),
-                      IM_COL32(0xE9, 0xEC, 0xF0, 255));
+                      ImGui::GetColorU32(theme::colors().bg));
 
     bool useDetail = full && full->valid() && dispW > preview_.w * 1.05f && fullW > preview_.w;
     if (preview_.valid())

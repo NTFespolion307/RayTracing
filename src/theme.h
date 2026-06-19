@@ -12,25 +12,38 @@ struct ImFont;
 
 namespace theme {
 
+// Light / dark colour scheme (Material 3 / "Material You"). The whole UI is
+// reskinned by swapping the palette and re-applying the style - no screen code
+// needs to know which mode is active.
+enum class Mode { Light, Dark };
+
 // --- Design tokens --------------------------------------------------------
 // Colours are sRGB 0..1. Names are semantic, not literal, so screens never
-// hardcode a hex value again.
+// hardcode a hex value again. Token names follow Material 3 roles.
 struct Palette {
-    ImVec4 bg;            // app background / window
-    ImVec4 surface;       // panels, sidebar, cards
-    ImVec4 surfaceAlt;    // nested children, input wells
-    ImVec4 border;        // 1px borders, separators
-    ImVec4 text;          // primary text
-    ImVec4 textMuted;     // labels, secondary info
-    ImVec4 accent;        // primary action, active state, progress, focus
+    ImVec4 bg;            // app background / window  (M3 surface)
+    ImVec4 surface;       // panels, sidebar, cards   (M3 surfaceContainerLow)
+    ImVec4 surfaceAlt;    // nested children, input wells (M3 surfaceContainer)
+    ImVec4 border;        // 1px borders, separators  (M3 outlineVariant)
+    ImVec4 text;          // primary text             (M3 onSurface)
+    ImVec4 textMuted;     // labels, secondary info   (M3 onSurfaceVariant)
+    ImVec4 accent;        // primary action, active state, progress, focus (M3 primary)
     ImVec4 accentHover;
     ImVec4 accentActive;
-    ImVec4 danger;        // destructive (Cancel)
+    ImVec4 onAccent;      // text/icon on a filled accent surface (M3 onPrimary)
+    ImVec4 secondaryContainer;   // tonal chips / selected segment (M3 secondaryContainer)
+    ImVec4 onSecondaryContainer; // text on the above
+    ImVec4 danger;        // destructive (Cancel)     (M3 error)
     ImVec4 dangerHover;
     ImVec4 success;       // completed / saved
 };
 
 const Palette& colors();
+// The currently active colour mode, and a live switch that rebuilds the
+// palette and re-applies the ImGui style (fonts are untouched - they are baked
+// into the atlas and shared by both modes).
+Mode mode();
+void setMode(Mode m);
 
 // 4px spacing scale, already multiplied by the DPI factor passed to apply().
 // Use these instead of magic numbers for any manual layout maths.
@@ -54,8 +67,9 @@ ImFont* fontRegular();
 ImFont* fontHeader();
 
 // Install all tokens (colours + sizes) into the current ImGui style and record
-// the DPI scale used by scale()/space().
-void apply(float dpiScale);
+// the DPI scale used by scale()/space(). `mode` selects the light or dark
+// Material palette; it can be changed later at runtime via setMode().
+void apply(float dpiScale, Mode mode = Mode::Light);
 
 // --- Component helpers ----------------------------------------------------
 // Semantic buttons.

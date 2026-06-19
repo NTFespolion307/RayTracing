@@ -320,7 +320,7 @@ bool App::initImGui() {
     // DPI is baked into the font sizes and the style metrics (not just the
     // font), so leave FontGlobalScale at 1 to avoid double-scaling.
     theme::loadFonts(io, dpiScale);
-    theme::apply(dpiScale);
+    theme::apply(dpiScale, theme::Mode::Light);
 
     ImGui_ImplGlfw_InitForVulkan(window_, true);
     ImGui_ImplVulkan_LoadFunctions(imguiLoader, ctx_.instance());
@@ -695,6 +695,13 @@ void App::drawHeaderBar() {
     ImGui::Text("GPU: %s   \xc2\xb7   Backend: %s", ctx_.deviceName(), backendLabel_.c_str());
     ImGui::PopStyleColor();
 
+    // Light/dark theme toggle (sits left of the action cluster, which still
+    // right-aligns itself, so its layout is unaffected).
+    bool dark = theme::mode() == theme::Mode::Dark;
+    ImGui::SameLine(0, theme::space().lg);
+    if (theme::SecondaryButton(dark ? "Light mode" : "Dark mode", ImVec2(theme::scale(110), 0)))
+        theme::setMode(dark ? theme::Mode::Light : theme::Mode::Dark);
+
     // Right-aligned action cluster: Demo | Load OBJ | Render.
     float bw1 = theme::scale(110), bw2 = theme::scale(120), bw3 = theme::scale(130);
     float gap = theme::space().sm;
@@ -860,7 +867,8 @@ void App::drawFrame() {
     vkBeginCommandBuffer(cmd, &bi);
 
     VkClearValue clear{};
-    clear.color = { { 0.957f, 0.961f, 0.969f, 1.0f } }; // theme bg (#F4F5F7)
+    const ImVec4 bg = theme::colors().bg;                // match the active (light/dark) theme bg
+    clear.color = { { bg.x, bg.y, bg.z, 1.0f } };
     VkRenderPassBeginInfo rbi{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
     rbi.renderPass = renderPass_;
     rbi.framebuffer = scFramebuffers_[imageIndex];

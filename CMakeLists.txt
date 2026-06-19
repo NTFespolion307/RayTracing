@@ -295,3 +295,16 @@ target_link_libraries(VkGigaTracer PRIVATE
     Shell32)
 
 set_target_properties(VkGigaTracer PROPERTIES OUTPUT_NAME "VkGigaTracer")
+
+# ---------------------------------------------------------------------------
+# Bundle UI fonts (Roboto) next to the executable.
+# ---------------------------------------------------------------------------
+# The Material UI loads Roboto-Regular.ttf / Roboto-Medium.ttf from a "fonts"
+# folder beside the .exe (see theme::loadFonts). Copy the repo's fonts/ dir
+# after every build. If the TTFs are absent the app falls back to a system
+# font, so this step is harmless when the folder only holds the README.
+add_custom_command(TARGET VkGigaTracer POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/fonts"
+            "$<TARGET_FILE_DIR:VkGigaTracer>/fonts"
+    COMMENT "Copying bundled UI fonts")
